@@ -1,0 +1,26 @@
+---
+source: crates/sim-core/tests/fixtures.rs
+expression: "render(&events, &state)"
+---
+## timeline
++     0ms main session_started cwd=Some("/home/user/project") branch=Some("main") version=Some("2.3.0")
++     0ms main message user -> main (Prompt) "Keep going with the refactor"
++     0ms main user_prompt "Keep going with the refactor"
++  1700ms main model_seen claude-opus-5-5
++  1700ms main tool_started toolu_01grep Grep (Search) "fn old_api in /home/user/project/src"
++  1700ms main usage claude-opus-5-5 in=10 out=120 cache_read=182000 cache_write=5000
++  2100ms main tool_finished toolu_01grep error=false duration=None output="src/a.rs…"
++ 19700ms main compacted trigger=Some("auto") pre_tokens=Some(187130)
++ 22700ms main thinking (0 chars)
++ 22700ms main usage claude-opus-5-5 in=9000 out=300 cache_read=0 cache_write=9000
++ 23200ms main tool_started toolu_02glob Glob (Search) "src/**/*.rs"
++ 23400ms main tool_finished toolu_02glob error=false duration=None output="src/a.rs…"
++ 24700ms main assistant_text "Found the remaining call sites; continuing."
++ 24700ms main usage claude-opus-5-5 in=5 out=40 cache_read=18000 cache_write=200
++ 24800ms main turn_ended duration=Some(24800)
+
+## state
+title: None
+cwd: Some("/home/user/project") branch: Some("main")
+events: 15 cost: $0.25
+agent main status=Idle model=Some("claude-opus-5-5") tools=2 errors=0 active=0 context=18205/1000000 cost=$0.25

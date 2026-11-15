@@ -1,0 +1,12 @@
+[package]
+name = "sim-render"
+description = "wgpu renderer for the agent scene, compiled to wasm (Phase 5)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

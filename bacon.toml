@@ -1,0 +1,15 @@
+# `bacon` re-runs a job on every save. `bacon clippy` is the usual inner loop.
+default_job = "clippy"
+
+[jobs.check]
+command = ["cargo", "check", "--workspace", "--all-targets"]
+
+[jobs.clippy]
+command = ["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]
+
+[jobs.test]
+command = ["cargo", "nextest", "run", "--workspace", "--no-tests=pass"]
+need_stdout = true
+
+[jobs.doc]
+command = ["cargo", "doc", "--workspace", "--no-deps"]

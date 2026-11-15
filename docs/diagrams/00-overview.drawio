@@ -1,0 +1,97 @@
+<mxfile host="drawio">
+  <diagram id="overview" name="System overview">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" page="1">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="claude-code" value="Claude Code (terminal sessions)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="40" y="40" width="200" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="transcripts" value="~/.claude/projects/*.jsonl" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;size=12;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="40" y="160" width="200" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="driver" value="driver/ (TS sidecar, Claude Agent SDK)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="900" y="40" width="220" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="workspace-fs" value="Workspace + /tmp files" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="900" y="160" width="220" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="sim-server" value="sim-server (tokio + axum)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;dashed=1;verticalAlign=top;align=left;spacingLeft=8;strokeColor=#999999;" vertex="1" parent="1">
+          <mxGeometry x="300" y="300" width="560" height="300" as="geometry"/>
+        </mxCell>
+        <mxCell id="ingest" value="ingest: tailer, discovery, POST /hooks/:event" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="320" y="340" width="240" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="sim-core" value="sim-core: Event, parser, SessionState, cost" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="600" y="340" width="240" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="broker" value="permission broker (oneshot + timeout)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="320" y="440" width="240" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="workspace" value="workspace watcher, diffs, file serving" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="600" y="440" width="240" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="ws" value="WebSocket hub (snapshot + deltas)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="460" y="530" width="240" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="sqlite" value="SQLite history" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;size=12;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="900" y="500" width="160" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="sim-protocol" value="sim-protocol (wire types, ts-rs)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="40" y="520" width="200" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="browser" value="Browser (Chrome / Edge)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;dashed=1;verticalAlign=top;align=left;spacingLeft=8;strokeColor=#999999;" vertex="1" parent="1">
+          <mxGeometry x="300" y="660" width="560" height="160" as="geometry"/>
+        </mxCell>
+        <mxCell id="web" value="web/ Vite + React: tabs, messages, approvals, diffs, chat" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="320" y="700" width="250" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="sim-render" value="sim-render (wgpu -&gt; wasm): scene, timeline, galaxy" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="590" y="700" width="250" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge-cc-transcripts" value="writes" style="endArrow=block;html=1;" edge="1" parent="1" source="claude-code" target="transcripts">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge-cc-hooks" value="HTTP hooks" style="endArrow=block;html=1;" edge="1" parent="1" source="claude-code" target="ingest">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge-transcripts-ingest" value="tail" style="endArrow=block;html=1;" edge="1" parent="1" source="transcripts" target="ingest">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge-driver-ingest" value="JSON-lines stdio" style="endArrow=block;dashed=1;html=1;" edge="1" parent="1" source="driver" target="ingest">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge-ingest-core" value="raw records" style="endArrow=block;html=1;" edge="1" parent="1" source="ingest" target="sim-core">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge-ingest-broker" value="PermissionRequest" style="endArrow=block;dashed=1;html=1;" edge="1" parent="1" source="ingest" target="broker">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge-fs-workspace" value="notify events" style="endArrow=block;dashed=1;html=1;" edge="1" parent="1" source="workspace-fs" target="workspace">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge-core-ws" value="state deltas" style="endArrow=block;dashed=1;html=1;" edge="1" parent="1" source="sim-core" target="ws">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge-core-sqlite" value="persist events" style="endArrow=block;html=1;" edge="1" parent="1" source="sim-core" target="sqlite">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge-broker-ws" value="pending approvals" style="endArrow=block;dashed=1;html=1;" edge="1" parent="1" source="broker" target="ws">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge-ws-web" value="WebSocket" style="endArrow=block;html=1;" edge="1" parent="1" source="ws" target="web">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge-web-broker" value="decision" style="endArrow=block;html=1;" edge="1" parent="1" source="web" target="broker">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge-web-render" value="scene updates (wasm)" style="endArrow=block;html=1;" edge="1" parent="1" source="web" target="sim-render">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge-protocol-ws" value="types" style="endArrow=block;html=1;" edge="1" parent="1" source="sim-protocol" target="ws">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
