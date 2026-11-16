@@ -28,7 +28,13 @@ export function ApprovalCard() {
   const decided = useStore((s) => s.decided);
   const decide = useStore((s) => s.decide);
   const selectSession = useStore((s) => s.selectSession);
-  const queue = useMemo(() => pendingQueue(sessions, decided), [sessions, decided]);
+  // Request ids hidden with the close button. Local only: no decision is sent, so Claude
+  // Code keeps (or falls back to) its own terminal prompt for them.
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set());
+  const queue = useMemo(
+    () => pendingQueue(sessions, decided).filter((q) => !dismissed.has(q.pending.request_id)),
+    [sessions, decided, dismissed],
+  );
   const head = queue[0];
   const requestId = head?.pending.request_id;
   const [mode, setMode] = useState<Mode>({ kind: 'view' });
@@ -53,6 +59,10 @@ export function ApprovalCard() {
   const startEdit = () => {
     if (head) setMode({ kind: 'edit', text: prettyJson(head.pending.input), error: null });
   };
+  const dismiss = () => {
+    if (!requestId) return;
+    setDismissed((prev) => new Set(prev).add(requestId));
+  };
   const saveEdit = () => {
     if (mode.kind !== 'edit') return;
     try {
@@ -63,14 +73,20 @@ export function ApprovalCard() {
   };
 
   // Keyboard: A / D / E when not typing. Inside the editors: Cmd/Ctrl+Enter confirms, Esc cancels.
-  const handlers = useRef({ allow, startEdit, setMode });
-  handlers.current = { allow, startEdit, setMode };
+  // Esc in view mode hides the card (same as the close button).
+  const handlers = useRef({ allow, startEdit, setMode, dismiss });
+  handlers.current = { allow, startEdit, setMode, dismiss };
   useEffect(() => {
     if (!requestId) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target)) return;
       if (mode.kind !== 'view') {
         if (e.key === 'Escape') handlers.current.setMode({ kind: 'view' });
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        handlers.current.dismiss();
         return;
       }
       const k = e.key.toLowerCase();
@@ -102,6 +118,14 @@ export function ApprovalCard() {
         <span className="approval__tool">{pending.tool_name}</span>
         <span className="approval__wait">waiting {formatDuration(now - pending.requested_at)}</span>
         {queue.length > 1 && <span className="badge">+{queue.length - 1}</span>}
+        <button
+          className="approval__close"
+          onClick={dismiss}
+          aria-label="Dismiss"
+          title="Hide this card (answer in the terminal)"
+        >
+          ×
+        </button>
       </div>
       <div className="approval__meta">
         <button className="link" onClick={() => selectSession(session.id)}>

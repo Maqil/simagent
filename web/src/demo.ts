@@ -98,6 +98,24 @@ function script(): Step[] {
     { delay: 300, agent: MAIN, kind: { type: 'title', title: 'Retry with backoff for HTTP client' } },
     ...tool(MAIN, 'Read', 'read', 'src/main.rs', { file_path: `${ROOT}/src/main.rs` }, MAIN_RS, 700),
     ...tool(MAIN, 'Read', 'read', 'src/http/client.rs', { file_path: `${ROOT}/src/http/client.rs` }, 'pub struct Client {\n    inner: reqwest::Client,\n}\n…', 600),
+    // The question card: "you" is on screen since the prompt above; open ~4 s, then answered.
+    ...tool(
+      MAIN,
+      'AskUserQuestion',
+      'ask',
+      'How should questions appear?',
+      {
+        questions: [
+          {
+            header: 'Animation',
+            question: 'How should questions appear?',
+            options: [{ label: 'Travel along path' }, { label: 'Speech bubble' }, { label: 'Orbiting chips' }],
+          },
+        ],
+      },
+      'User answered: Travel along path',
+      4000,
+    ),
     { delay: 500, agent: MAIN, kind: { type: 'assistant_text', text: "I'll explore the call sites and run the tests in parallel." } },
     { delay: 300, agent: MAIN, kind: { type: 'tool_started', tool_use_id: 'toolu_agent_1', name: 'Agent', tool_kind: 'agent', summary: 'Find all HTTP call sites', input: { subagent_type: 'Explore', description: 'Find all HTTP call sites' } } },
     { delay: 200, agent: MAIN, kind: { type: 'subagent_spawned', child: EXPLORE, agent_type: 'Explore', description: 'Find all HTTP call sites', tool_use_id: 'toolu_agent_1' } },

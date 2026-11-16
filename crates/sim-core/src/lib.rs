@@ -14,6 +14,7 @@ pub mod ids;
 pub mod parser;
 pub mod state;
 mod state_impl;
+pub mod usage;
 
 pub use event::{
     Decision, Event, EventKind, MessageChannel, Resolution, Source, TimestampMs, ToolKind, Usage,

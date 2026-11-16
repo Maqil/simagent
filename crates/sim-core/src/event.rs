@@ -91,8 +91,15 @@ pub struct Usage {
     pub output: u64,
     /// Tokens read from the prompt cache.
     pub cache_read: u64,
-    /// Tokens written to the prompt cache.
+    /// Tokens written to the prompt cache (both lifetimes).
     pub cache_write: u64,
+    /// The part of `cache_write` stored with the 1-hour lifetime, billed at 2x input
+    /// instead of 1.25x. A subset, so older events without it still total correctly.
+    #[serde(default)]
+    pub cache_write_1h: u64,
+    /// The part of `output` spent on thinking, when the transcript reports it.
+    #[serde(default)]
+    pub thinking: u64,
 }
 
 impl Usage {
@@ -100,6 +107,25 @@ impl Usage {
     #[must_use]
     pub fn context_tokens(&self) -> u64 {
         self.input + self.cache_read + self.cache_write
+    }
+
+    /// Every token billed for this request: input side plus output.
+    #[must_use]
+    pub fn total_tokens(&self) -> u64 {
+        self.context_tokens() + self.output
+    }
+}
+
+/// Summing usage field by field, so totals are `total += usage` instead of four lines
+/// that drift apart when a field is added.
+impl std::ops::AddAssign<&Usage> for Usage {
+    fn add_assign(&mut self, other: &Usage) {
+        self.input += other.input;
+        self.output += other.output;
+        self.cache_read += other.cache_read;
+        self.cache_write += other.cache_write;
+        self.cache_write_1h += other.cache_write_1h;
+        self.thinking += other.thinking;
     }
 }
 

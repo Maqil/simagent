@@ -37,6 +37,10 @@ export function SessionBrowser() {
 function BrowserDialog({ onClose }: { onClose: () => void }) {
   const source = useStore((s) => s.replaySource);
   const openReplay = useStore((s) => s.openReplay);
+  const openLive = useStore((s) => s.openLive);
+  // The scripted demo has no server to load sessions from, so it can only replay.
+  const canOpenLive = useStore((s) => s.connection !== 'demo');
+  const loaded = useStore((s) => s.sessions);
   const [load, setLoad] = useState<Load>({ kind: 'loading' });
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
@@ -70,7 +74,9 @@ function BrowserDialog({ onClose }: { onClose: () => void }) {
     listRef.current?.querySelector<HTMLElement>(`[data-i="${active}"]`)?.scrollIntoView({ block: 'nearest' });
   }, [active]);
 
-  const pick = (s: SessionSummary) => void openReplay(s.id, { title: s.title, autoplay: true });
+  const replay = (s: SessionSummary) => void openReplay(s.id, { title: s.title, autoplay: true });
+  /** Default action: open live as a tab (replay when there is no server, e.g. the demo). */
+  const pick = (s: SessionSummary) => (canOpenLive ? openLive(s.id) : replay(s));
 
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') onClose();
@@ -82,7 +88,7 @@ function BrowserDialog({ onClose }: { onClose: () => void }) {
       setActive((a) => Math.max(0, a - 1));
     } else if (e.key === 'Enter') {
       const s = filtered[active];
-      if (s) pick(s);
+      if (s) (e.shiftKey ? replay : pick)(s);
     }
   };
 
@@ -109,12 +115,11 @@ function BrowserDialog({ onClose }: { onClose: () => void }) {
           <ul className="browser__list" ref={listRef} role="listbox">
             {!filtered.length && <li className="panel-empty">No sessions match “{query}”.</li>}
             {filtered.map((s, i) => (
-              <li key={s.id} data-i={i} role="option" aria-selected={i === active}>
+              <li key={s.id} data-i={i} role="option" aria-selected={i === active} className="session-item" onMouseEnter={() => setActive(i)}>
                 <button
                   className={`session-row${i === active ? ' session-row--active' : ''}`}
                   onClick={() => pick(s)}
-                  onMouseEnter={() => setActive(i)}
-                  title={`${s.cwd ?? s.project}\n${s.id}`}
+                  title={`${canOpenLive ? (loaded[s.id] ? 'Switch to this tab' : 'Open live as a tab') : 'Replay'}\n${s.cwd ?? s.project}\n${s.id}`}
                 >
                   <span className="session-row__main">
                     <span className="session-row__title">
@@ -132,13 +137,24 @@ function BrowserDialog({ onClose }: { onClose: () => void }) {
                     {s.subagents > 0 && <span className="session-row__subs">⑂ {s.subagents}</span>}
                   </span>
                 </button>
+                {canOpenLive && (
+                  <button className="btn btn--small session-item__replay" onClick={() => replay(s)} title="Replay from the start (⇧↵)">
+                    Replay
+                  </button>
+                )}
               </li>
             ))}
           </ul>
         )}
         <div className="browser__foot muted small">
           <kbd>↑</kbd>
-          <kbd>↓</kbd> choose · <kbd>↵</kbd> replay · <kbd>Esc</kbd> close · <kbd>⌘K</kbd> toggle
+          <kbd>↓</kbd> choose · <kbd>↵</kbd> {canOpenLive ? 'open' : 'replay'}
+          {canOpenLive && (
+            <>
+              {' '}· <kbd>⇧↵</kbd> replay
+            </>
+          )}{' '}
+          · <kbd>Esc</kbd> close · <kbd>⌘K</kbd> toggle
         </div>
       </div>
     </div>

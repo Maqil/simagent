@@ -83,19 +83,52 @@ struct TailedFile {
 #[derive(Debug)]
 pub struct Tailer {
     projects_dir: PathBuf,
-    window: Duration,
+    /// How many of the most recent sessions [`Tailer::initial_scan`] loads.
+    startup_sessions: usize,
+    /// Files modified after this are active sessions and are picked up by [`Tailer::scan`].
+    started: SystemTime,
     files: HashMap<PathBuf, TailedFile>,
 }
 
 impl Tailer {
-    /// Creates a tailer for `projects_dir` that picks up files modified within `window`.
+    /// Creates a tailer for `projects_dir`. At startup it loads the `startup_sessions` most
+    /// recently modified sessions; after that, any session that changes is picked up.
     #[must_use]
-    pub fn new(projects_dir: PathBuf, window: Duration) -> Self {
+    pub fn new(projects_dir: PathBuf, startup_sessions: usize) -> Self {
         Self {
             projects_dir,
-            window,
+            startup_sessions,
+            started: SystemTime::now(),
             files: HashMap::new(),
         }
+    }
+
+    /// Loads the `startup_sessions` most recently modified sessions (main transcript plus
+    /// its subagents). Older sessions load on demand ([`IngestHandle::open`]) or when they
+    /// change.
+    pub fn initial_scan(&mut self) -> Vec<Event> {
+        let mut mains: Vec<(SystemTime, PathBuf)> = self
+            .list_transcripts()
+            .into_iter()
+            .filter(|p| matches!(self.classify(p), Some(FileKind::Main { .. })))
+            .filter_map(|p| Some((modified(&p)?, p)))
+            .collect();
+        // Newest first; ties broken by path so the choice is deterministic.
+        mains.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        let mut events = Vec::new();
+        for (_, main) in mains.into_iter().take(self.startup_sessions) {
+            events.extend(self.open_paths(&main));
+        }
+        events
+    }
+
+    /// Starts tracking one session: its main transcript first, then every subagent.
+    fn open_paths(&mut self, main: &Path) -> Vec<Event> {
+        let mut events = self.poke(main);
+        for sub in subagent_files(main) {
+            events.extend(self.poke(&sub));
+        }
+        events
     }
 
     /// Number of files currently tracked.
@@ -104,12 +137,12 @@ impl Tailer {
         self.files.len()
     }
 
-    /// Lists candidate transcripts, starts tracking new recent ones and reads new bytes
-    /// from every tracked file. Used at startup and by the poll fallback.
+    /// Lists candidate transcripts, starts tracking ones that changed since startup and
+    /// reads new bytes from every tracked file. The poll fallback for missed notifications.
     pub fn scan(&mut self) -> Vec<Event> {
         let mut events = Vec::new();
         for path in self.list_transcripts() {
-            if self.files.contains_key(&path) || self.is_recent(&path) {
+            if self.files.contains_key(&path) || self.changed_since_start(&path) {
                 events.extend(self.poke(&path));
             }
         }
@@ -128,7 +161,7 @@ impl Tailer {
 
     /// Handles a change notification for `path` (a transcript or a subagent meta file).
     /// A transcript that is not tracked yet starts being tracked: it just changed, so it is
-    /// active regardless of the startup window.
+    /// active, whether or not it was loaded at startup.
     pub fn poke(&mut self, path: &Path) -> Vec<Event> {
         let name = path
             .file_name()
@@ -277,12 +310,8 @@ impl Tailer {
         }]
     }
 
-    fn is_recent(&self, path: &Path) -> bool {
-        std::fs::metadata(path)
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| SystemTime::now().duration_since(t).ok())
-            .is_some_and(|age| age <= self.window)
+    fn changed_since_start(&self, path: &Path) -> bool {
+        modified(path).is_some_and(|t| t >= self.started)
     }
 
     /// Classifies a path under the projects dir; `None` for anything we don't tail.
@@ -398,6 +427,11 @@ fn first_record_ms(path: &Path) -> Option<TimestampMs> {
         .flat_map(|line| parser.feed_line(line))
         .map(|e| e.at)
         .find(|&at| at > 0)
+}
+
+/// When `path` was last modified; `None` if it can't be read.
+fn modified(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 fn mtime_ms(path: &Path) -> Option<TimestampMs> {
@@ -580,17 +614,65 @@ fn parse_whole_file(path: &Path, mut parser: TranscriptParser) -> std::io::Resul
 
 /// Starts the ingest loop on a blocking thread: initial scan, then `notify` events plus
 /// the poll fallback. Returns immediately.
-pub fn spawn(hub: HubHandle, projects_dir: PathBuf, window: Duration) {
-    tokio::task::spawn_blocking(move || run(&hub, projects_dir, window));
+/// Lets the rest of the server ask the ingest thread to load a session on demand.
+///
+/// It sends the session's transcript paths down the same channel the file watcher uses,
+/// so an opened session goes through [`Tailer::poke`] exactly like a changed file: one
+/// code path reads transcripts, on one thread, with no locking.
+#[derive(Debug, Clone)]
+pub struct IngestHandle {
+    projects_dir: PathBuf,
+    tx: std_mpsc::Sender<PathBuf>,
 }
 
-fn run(hub: &HubHandle, projects_dir: PathBuf, window: Duration) {
+impl IngestHandle {
+    /// Asks the ingest thread to start tailing session `id` (main transcript and
+    /// subagents). Its events then reach the browser through the hub like any other.
+    ///
+    /// Blocking (lists a directory): call it from `spawn_blocking`.
+    ///
+    /// # Errors
+    /// [`LoadError::InvalidId`] for an unsafe id, [`LoadError::NotFound`] when no
+    /// transcript exists or the ingest thread has stopped.
+    pub fn open(&self, id: &str) -> Result<(), LoadError> {
+        if !valid_session_id(id) {
+            return Err(LoadError::InvalidId);
+        }
+        let main = find_transcript(&self.projects_dir, id).ok_or(LoadError::NotFound)?;
+        let subs = subagent_files(&main);
+        // Main first, so subagents attach to a session that already exists.
+        for path in std::iter::once(main).chain(subs) {
+            self.tx.send(path).map_err(|_| LoadError::NotFound)?;
+        }
+        Ok(())
+    }
+}
+
+/// Starts the ingest thread: loads the `startup_sessions` most recent sessions, then
+/// follows file changes. Returns the handle used to open more sessions on demand.
+#[must_use]
+pub fn spawn(hub: HubHandle, projects_dir: PathBuf, startup_sessions: usize) -> IngestHandle {
     let (tx, rx) = std_mpsc::channel::<PathBuf>();
+    let handle = IngestHandle {
+        projects_dir: projects_dir.clone(),
+        tx: tx.clone(),
+    };
+    tokio::task::spawn_blocking(move || run(&hub, projects_dir, startup_sessions, tx, &rx));
+    handle
+}
+
+fn run(
+    hub: &HubHandle,
+    projects_dir: PathBuf,
+    startup_sessions: usize,
+    tx: std_mpsc::Sender<PathBuf>,
+    rx: &std_mpsc::Receiver<PathBuf>,
+) {
     // Keep the watcher alive for the whole loop; dropping it stops notifications.
     let _watcher = start_watcher(&projects_dir, tx);
-    let mut tailer = Tailer::new(projects_dir, window);
+    let mut tailer = Tailer::new(projects_dir, startup_sessions);
 
-    let initial = tailer.scan();
+    let initial = tailer.initial_scan();
     tracing::info!(
         files = tailer.tracked(),
         events = initial.len(),
@@ -674,8 +756,8 @@ mod tests {
         f.write_all(b"{\"type\":\"user\"}\n{\"type\":").unwrap();
         f.flush().unwrap();
 
-        let mut tailer = Tailer::new(dir.path().to_path_buf(), Duration::from_secs(3600));
-        tailer.scan();
+        let mut tailer = Tailer::new(dir.path().to_path_buf(), 10);
+        tailer.initial_scan();
         assert_eq!(tailer.tracked(), 1);
         let state = &tailer.files[&path];
         assert_eq!(state.session, SessionId::new("sess-1"));
@@ -690,16 +772,76 @@ mod tests {
         assert_eq!(state.partial.len(), 0);
     }
 
+    /// Writes `<proj>/<id>.jsonl` with its mtime `age_s` seconds in the past.
+    fn session_file(proj: &Path, id: &str, age_s: u64) -> PathBuf {
+        let path = proj.join(format!("{id}.jsonl"));
+        std::fs::write(&path, b"{}\n").unwrap();
+        let file = File::options().write(true).open(&path).unwrap();
+        file.set_modified(SystemTime::now() - Duration::from_secs(age_s))
+            .unwrap();
+        path
+    }
+
     #[test]
-    fn old_files_are_skipped_at_startup() {
+    fn startup_loads_only_the_most_recent_sessions() {
         let dir = tempfile::tempdir().unwrap();
         let proj = dir.path().join("proj");
         std::fs::create_dir_all(&proj).unwrap();
-        std::fs::write(proj.join("old.jsonl"), b"{}\n").unwrap();
-        let mut tailer = Tailer::new(dir.path().to_path_buf(), Duration::ZERO);
-        std::thread::sleep(Duration::from_millis(20));
+        // s1 is the newest, s5 the oldest.
+        let paths: Vec<PathBuf> = (1..=5)
+            .map(|i| session_file(&proj, &format!("s{i}"), i * 600))
+            .collect();
+        // A subagent of the newest session comes along with it.
+        let subs = proj.join("s1").join("subagents");
+        std::fs::create_dir_all(&subs).unwrap();
+        std::fs::write(subs.join("agent-x.jsonl"), b"").unwrap();
+
+        let mut tailer = Tailer::new(dir.path().to_path_buf(), 3);
+        tailer.initial_scan();
+        assert_eq!(tailer.tracked(), 4, "3 sessions plus one subagent");
+        for (i, p) in paths.iter().enumerate() {
+            assert_eq!(tailer.files.contains_key(p), i < 3, "s{}", i + 1);
+        }
+        // Old, unchanged sessions are not picked up by the poll fallback either.
         tailer.scan();
-        assert_eq!(tailer.tracked(), 0);
+        assert_eq!(tailer.tracked(), 4);
+        // ...but one that changes after startup is.
+        std::fs::write(&paths[4], b"{}\n{}\n").unwrap();
+        let file = File::options().write(true).open(&paths[4]).unwrap();
+        file.set_modified(SystemTime::now() + Duration::from_secs(5))
+            .unwrap();
+        tailer.scan();
+        assert!(tailer.files.contains_key(&paths[4]));
+    }
+
+    #[test]
+    fn open_sends_main_then_subagents_and_rejects_bad_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let proj = dir.path().join("proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        let main = session_file(&proj, "old-1", 86_400);
+        let subs = proj.join("old-1").join("subagents");
+        std::fs::create_dir_all(&subs).unwrap();
+        std::fs::write(subs.join("agent-a.jsonl"), b"").unwrap();
+
+        let (tx, rx) = std_mpsc::channel();
+        let handle = IngestHandle {
+            projects_dir: dir.path().to_path_buf(),
+            tx,
+        };
+        handle.open("old-1").unwrap();
+        let sent: Vec<PathBuf> = rx.try_iter().collect();
+        assert_eq!(sent, [main.clone(), subs.join("agent-a.jsonl")]);
+
+        assert!(matches!(handle.open("../etc"), Err(LoadError::InvalidId)));
+        assert!(matches!(handle.open("missing"), Err(LoadError::NotFound)));
+
+        // What the ingest thread then does with those paths: an old session loads.
+        let mut tailer = Tailer::new(dir.path().to_path_buf(), 0);
+        for p in &sent {
+            tailer.poke(p);
+        }
+        assert_eq!(tailer.tracked(), 2);
     }
 
     #[test]
@@ -715,8 +857,8 @@ mod tests {
         )
         .unwrap();
 
-        let mut tailer = Tailer::new(dir.path().to_path_buf(), Duration::from_secs(3600));
-        let events = tailer.scan();
+        let mut tailer = Tailer::new(dir.path().to_path_buf(), 10);
+        let events = tailer.poke(&subs.join("agent-abc.jsonl"));
         let spawned: Vec<_> = events
             .iter()
             .filter(|e| matches!(e.kind, EventKind::SubagentSpawned { .. }))
@@ -749,7 +891,7 @@ mod tests {
 
     #[test]
     fn unreadable_paths_do_not_panic() {
-        let mut tailer = Tailer::new(PathBuf::from("/nonexistent/simagent"), Duration::MAX);
+        let mut tailer = Tailer::new(PathBuf::from("/nonexistent/simagent"), 10);
         assert_eq!(tailer.scan().len(), 0);
         let poked = tailer.poke(Path::new("/nonexistent/simagent/p/x.jsonl"));
         assert_eq!(poked.len(), 0);

@@ -1,8 +1,9 @@
 import { useMemo } from 'react';
-import { useStore, pendingQueue, openSessions } from '../store';
+import { useStore, pendingQueue, openSessions, tabSessions } from '../store';
 import { formatCost, sessionLabel, sessionStatus } from '../format';
 import { statusColor } from '../tokens';
 import { Mascot } from './Mascot';
+import { ChartIcon } from './icons';
 
 const connLabel = {
   connecting: 'connecting',
@@ -22,10 +23,13 @@ export function TopBar() {
   const exitReplay = useStore((s) => s.exitReplay);
   const openReplay = useStore((s) => s.openReplay);
   const setBrowserOpen = useStore((s) => s.setBrowserOpen);
+  const view = useStore((s) => s.view);
+  const setView = useStore((s) => s.setView);
 
   const closed = useStore((s) => s.closed);
   const closeSession = useStore((s) => s.closeSession);
   const list = useMemo(() => openSessions(sessions, closed), [sessions, closed]);
+  const { tabs, hidden } = useMemo(() => tabSessions(list, selected, decided), [list, selected, decided]);
   const pendingCount = useMemo(() => pendingQueue(sessions, decided).length, [sessions, decided]);
   const thinking = useMemo(
     () => list.some((s) => Object.values(s.agents).some((a) => a.status === 'thinking')),
@@ -48,7 +52,7 @@ export function TopBar() {
         </span>
       </div>
       <nav className="tabs" role="tablist" aria-label="Sessions">
-        {list.map((s) => {
+        {tabs.map((s) => {
           const st = sessionStatus(s);
           const pending = s.pending.filter((p) => !decided[p.request_id]).length;
           const active = replayId === null && s.id === selected;
@@ -61,6 +65,7 @@ export function TopBar() {
                 className="tab__main"
                 onClick={() => {
                   if (replayId) exitReplay();
+                  setView('live');
                   selectSession(s.id);
                 }}
                 onContextMenu={(e) => {
@@ -90,10 +95,27 @@ export function TopBar() {
             </div>
           );
         })}
+        {hidden > 0 && (
+          <button
+            className="tab tab--more"
+            onClick={() => setBrowserOpen(true)}
+            title={`${hidden} more open session${hidden === 1 ? '' : 's'}: open History to switch`}
+          >
+            +{hidden}
+          </button>
+        )}
       </nav>
       <div className="topbar__right">
         <button className="btn btn--small history-btn" onClick={() => setBrowserOpen(true)} title="Browse and replay past sessions (⌘K)">
           History <kbd>⌘K</kbd>
+        </button>
+        <button
+          className={`btn btn--small usage-btn${view === 'usage' ? ' is-on' : ''}`}
+          onClick={() => setView(view === 'usage' ? 'live' : 'usage')}
+          aria-pressed={view === 'usage'}
+          title="Tokens, output and API-equivalent cost across all sessions"
+        >
+          <ChartIcon size={13} /> Usage
         </button>
         {pendingCount > 0 && (
           <span className="pending-pill" title="Pending permission requests">

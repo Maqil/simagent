@@ -189,11 +189,33 @@ fn start_tool(state: &mut SessionState, event: &Event) {
 
 fn finish_tool(state: &mut SessionState, event: &Event, tool_use_id: &ToolUseId, is_error: bool) {
     let agent = ensure_agent(state, &event.agent, event.at);
-    agent.active_tools.retain(|t| &t.tool_use_id != tool_use_id);
+    let finished = agent
+        .active_tools
+        .iter()
+        .position(|t| &t.tool_use_id == tool_use_id)
+        .map(|i| agent.active_tools.remove(i).name);
     if is_error {
         agent.tool_errors += 1;
     }
     agent.status = busy_status(agent);
+    if let Some(name) = finished {
+        settle_answered_elsewhere(state, &event.agent, &name);
+    }
+}
+
+/// A tool that finished was approved or denied somewhere, so the oldest pending request
+/// for the same agent and tool is over. Claude Code keeps the `PermissionRequest` hook
+/// open after the user answers in the terminal, so without this the card would wait for
+/// the broker's timeout. The broker's own late `PermissionResolved` then finds no entry,
+/// which `resolve_permission` already tolerates.
+fn settle_answered_elsewhere(state: &mut SessionState, agent: &AgentId, tool_name: &str) {
+    if let Some(i) = state
+        .pending
+        .iter()
+        .position(|p| &p.agent == agent && p.tool_name == tool_name)
+    {
+        state.pending.remove(i);
+    }
 }
 
 fn request_permission(state: &mut SessionState, event: &Event) {
@@ -218,10 +240,7 @@ fn request_permission(state: &mut SessionState, event: &Event) {
 fn add_usage(state: &mut SessionState, id: &AgentId, at: TimestampMs, model: &str, usage: &Usage) {
     let cost = cost::cost_usd(model, usage);
     let agent = ensure_agent(state, id, at);
-    agent.usage.input += usage.input;
-    agent.usage.output += usage.output;
-    agent.usage.cache_read += usage.cache_read;
-    agent.usage.cache_write += usage.cache_write;
+    agent.usage += usage;
     agent.context_tokens = usage.context_tokens();
     agent.cost_usd += cost;
     state.cost_usd += cost;
@@ -346,9 +365,7 @@ mod tests {
         ));
         let usage = Usage {
             input: 1_000_000,
-            output: 0,
-            cache_read: 0,
-            cache_write: 0,
+            ..Usage::default()
         };
         let kind = EventKind::UsageReported {
             model: "claude-haiku-4-5".into(),
@@ -431,6 +448,42 @@ mod tests {
         ));
         assert_eq!(s.pending.len(), 0);
         assert_eq!(main_status(&s), Some(AgentStatus::Tool));
+    }
+
+    #[test]
+    fn tool_finishing_settles_a_request_answered_in_the_terminal() {
+        let mut s = SessionState::new(SessionId::new("s"), 0);
+        s.apply(&ev("main", 1, started("t")));
+        for (id, tool) in [("r-read", "Read"), ("r-bash", "Bash")] {
+            s.apply(&ev(
+                "main",
+                2,
+                EventKind::PermissionRequested {
+                    request_id: RequestId::new(id),
+                    tool_name: tool.into(),
+                    input: json!({}),
+                },
+            ));
+        }
+        // The user approved the Read in the terminal; the hook is still open, but the
+        // transcript shows the tool's result.
+        s.apply(&ev("main", 3, finished("t", false)));
+        let left: Vec<&str> = s.pending.iter().map(|p| p.request_id.as_str()).collect();
+        assert_eq!(
+            left,
+            ["r-bash"],
+            "only the matching tool's request is settled"
+        );
+        // The broker's late fallback for the settled request is a harmless no-op.
+        s.apply(&ev(
+            "main",
+            4,
+            EventKind::PermissionResolved {
+                request_id: RequestId::new("r-read"),
+                resolution: Resolution::FellBack,
+            },
+        ));
+        assert_eq!(s.pending.len(), 1);
     }
 
     #[test]

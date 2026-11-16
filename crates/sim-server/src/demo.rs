@@ -65,7 +65,7 @@ pub async fn run(opts: &Opts, args: &DemoArgs) -> anyhow::Result<()> {
         server_opts.port = DEMO_PORT;
     }
     // Everything in the demo dir is fresh; load it all.
-    server_opts.active_within_mins = 24 * 60;
+    server_opts.startup_sessions = usize::MAX;
     let token = crate::config::load_or_create_token()?;
     let port = server_opts.port;
     let speed = if args.speed > 0.0 { args.speed } else { 1.0 };

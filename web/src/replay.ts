@@ -15,6 +15,7 @@ import type {
   SessionSummary,
   ReplayResponse,
   TimestampMs,
+  CostBreakdown,
   Usage,
 } from './protocol';
 import { MAIN_AGENT } from './protocol';
@@ -23,37 +24,73 @@ import { getToken } from './connection';
 // ---------------------------------------------------------------- cost.rs
 
 interface ModelInfo {
-  family: string;
+  pattern: string;
   context_window: number;
   input_per_mtok: number;
   output_per_mtok: number;
+  cache_read_per_mtok: number;
+  /** Every rate is multiplied by `factor` when the prompt exceeds `above_tokens`. */
+  long_prompt?: { above_tokens: number; factor: number };
 }
 
-/** Matched in order against the lowercased model id (same table as cost.rs). */
+const M = 1_000_000;
+const row = (pattern: string, context_window: number, i: number, o: number, r: number): ModelInfo => ({
+  pattern,
+  context_window,
+  input_per_mtok: i,
+  output_per_mtok: o,
+  cache_read_per_mtok: r,
+});
+
+/** Most specific first (same table and order as cost.rs). */
 const MODELS: readonly ModelInfo[] = [
-  { family: 'fable', context_window: 1_000_000, input_per_mtok: 10, output_per_mtok: 50 },
-  { family: 'mythos', context_window: 1_000_000, input_per_mtok: 10, output_per_mtok: 50 },
-  { family: 'opus', context_window: 1_000_000, input_per_mtok: 5, output_per_mtok: 25 },
-  { family: 'sonnet', context_window: 1_000_000, input_per_mtok: 3, output_per_mtok: 15 },
-  { family: 'haiku', context_window: 200_000, input_per_mtok: 1, output_per_mtok: 5 },
+  row('fable-5-2', M, 8, 40, 0.2),
+  row('mythos-5-2', M, 8, 40, 0.2),
+  row('fable-5-1', M, 10, 50, 0.25),
+  row('mythos-5-1', M, 10, 50, 0.25),
+  row('fable', M, 10, 50, 1),
+  row('mythos', M, 10, 50, 1),
+  row('opus-5-5', M, 4, 20, 0.2),
+  row('opus', M, 5, 25, 0.5),
+  row('sonnet-5-5', M, 2, 10, 0.1),
+  row('sonnet-5', M, 2, 10, 0.2),
+  row('sonnet', M, 3, 15, 0.3),
+  { ...row('haiku-5-5', M, 0.1, 0.5, 0.01), long_prompt: { above_tokens: 100_000, factor: 5 } },
+  row('haiku', 200_000, 1, 5, 0.1),
 ];
-const CACHE_WRITE_FACTOR = 1.25;
-const CACHE_READ_FACTOR = 0.1;
+const CACHE_WRITE_5M_FACTOR = 1.25;
+const CACHE_WRITE_1H_FACTOR = 2;
 
 export function modelInfo(model: string): ModelInfo | null {
   const id = model.toLowerCase();
-  return MODELS.find((m) => id.includes(m.family)) ?? null;
+  return MODELS.find((m) => id.includes(m.pattern)) ?? null;
 }
 
 export function contextWindow(model: string): number {
   return modelInfo(model)?.context_window ?? 200_000;
 }
 
-export function costUsd(model: string, u: Usage): number {
+/** Mirrors `cost::cost_breakdown`. */
+export function costBreakdown(model: string, u: Usage): CostBreakdown {
   const info = modelInfo(model);
-  if (!info) return 0;
-  const inputSide = u.input + u.cache_write * CACHE_WRITE_FACTOR + u.cache_read * CACHE_READ_FACTOR;
-  return (inputSide * info.input_per_mtok + u.output * info.output_per_mtok) / 1_000_000;
+  if (!info) return { input: 0, output: 0, cache_read: 0, cache_write: 0 };
+  const lp = info.long_prompt;
+  const factor = lp && u.input + u.cache_read + u.cache_write > lp.above_tokens ? lp.factor : 1;
+  const usd = (n: number, perMtok: number) => (n * perMtok * factor) / M;
+  const w1h = u.cache_write_1h ?? 0;
+  const w5m = Math.max(0, u.cache_write - w1h);
+  return {
+    input: usd(u.input, info.input_per_mtok),
+    output: usd(u.output, info.output_per_mtok),
+    cache_read: usd(u.cache_read, info.cache_read_per_mtok),
+    cache_write:
+      usd(w5m, info.input_per_mtok * CACHE_WRITE_5M_FACTOR) + usd(w1h, info.input_per_mtok * CACHE_WRITE_1H_FACTOR),
+  };
+}
+
+export function costUsd(model: string, u: Usage): number {
+  const c = costBreakdown(model, u);
+  return c.input + c.output + c.cache_read + c.cache_write;
 }
 
 // ---------------------------------------------------------------- state_impl.rs
@@ -67,7 +104,7 @@ export function newAgent(id: AgentId, parent: AgentId | null, name: string, at: 
     status: 'idle',
     model: null,
     active_tools: [],
-    usage: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+    usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, cache_write_1h: 0, thinking: 0 },
     context_tokens: 0,
     context_window: 200_000,
     cost_usd: 0,
@@ -132,6 +169,8 @@ export function applyEvent(s: SessionState, e: AgentEvent): void {
       agent.usage.output += e.usage.output;
       agent.usage.cache_read += e.usage.cache_read;
       agent.usage.cache_write += e.usage.cache_write;
+      agent.usage.cache_write_1h = (agent.usage.cache_write_1h ?? 0) + (e.usage.cache_write_1h ?? 0);
+      agent.usage.thinking = (agent.usage.thinking ?? 0) + (e.usage.thinking ?? 0);
       agent.context_tokens = e.usage.input + e.usage.cache_read + e.usage.cache_write;
       agent.cost_usd += cost;
       s.cost_usd += cost;
@@ -148,11 +187,18 @@ export function applyEvent(s: SessionState, e: AgentEvent): void {
       agent.tool_calls += 1;
       agent.status = 'tool';
       break;
-    case 'tool_finished':
+    case 'tool_finished': {
+      const done = agent.active_tools.find((t) => t.tool_use_id === e.tool_use_id);
       agent.active_tools = agent.active_tools.filter((t) => t.tool_use_id !== e.tool_use_id);
       if (e.is_error) agent.tool_errors += 1;
       agent.status = busyStatus(agent);
+      // Port of settle_answered_elsewhere: the tool ran, so its permission was answered.
+      if (done) {
+        const i = s.pending.findIndex((p) => p.agent === e.agent && p.tool_name === done.name);
+        if (i >= 0) s.pending.splice(i, 1);
+      }
       break;
+    }
     case 'subagent_spawned': {
       const child = ensureAgent(s, e.child, at);
       child.parent = e.agent;

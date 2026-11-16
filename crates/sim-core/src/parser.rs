@@ -189,12 +189,7 @@ impl TranscriptParser {
         {
             out.push(EventKind::UsageReported {
                 model: model.to_owned(),
-                usage: Usage {
-                    input: u64_field(usage, "input_tokens"),
-                    output: u64_field(usage, "output_tokens"),
-                    cache_read: u64_field(usage, "cache_read_input_tokens"),
-                    cache_write: u64_field(usage, "cache_creation_input_tokens"),
-                },
+                usage: parse_usage(usage),
             });
         }
     }
@@ -486,6 +481,23 @@ fn str_field<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
 
 fn u64_field(v: &Value, key: &str) -> u64 {
     v.get(key).and_then(Value::as_u64).unwrap_or(0)
+}
+
+/// Reads an API `usage` object. The nested splits (`cache_creation`,
+/// `output_tokens_details`) are optional and clamped to their totals, so a malformed
+/// record can never produce more 1-hour writes than writes.
+fn parse_usage(usage: &Value) -> Usage {
+    let output = u64_field(usage, "output_tokens");
+    let cache_write = u64_field(usage, "cache_creation_input_tokens");
+    let nested = |object: &str, key: &str| usage.get(object).map_or(0, |o| u64_field(o, key));
+    Usage {
+        input: u64_field(usage, "input_tokens"),
+        output,
+        cache_read: u64_field(usage, "cache_read_input_tokens"),
+        cache_write,
+        cache_write_1h: nested("cache_creation", "ephemeral_1h_input_tokens").min(cache_write),
+        thinking: nested("output_tokens_details", "thinking_tokens").min(output),
+    }
 }
 
 #[cfg(test)]
@@ -796,6 +808,30 @@ mod tests {
     }
 
     #[test]
+    fn reads_one_hour_cache_writes_and_thinking_tokens() {
+        let usage = serde_json::json!({
+            "input_tokens": 2, "output_tokens": 412, "cache_read_input_tokens": 24_972,
+            "cache_creation_input_tokens": 14_519,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 14_519},
+            "output_tokens_details": {"thinking_tokens": 203}
+        });
+        let u = parse_usage(&usage);
+        assert_eq!((u.cache_write, u.cache_write_1h), (14_519, 14_519));
+        assert_eq!((u.output, u.thinking), (412, 203));
+    }
+
+    #[test]
+    fn clamps_splits_larger_than_their_totals() {
+        let usage = serde_json::json!({
+            "output_tokens": 5, "cache_creation_input_tokens": 10,
+            "cache_creation": {"ephemeral_1h_input_tokens": 99},
+            "output_tokens_details": {"thinking_tokens": 99}
+        });
+        let u = parse_usage(&usage);
+        assert_eq!((u.cache_write_1h, u.thinking), (10, 5));
+    }
+
+    #[test]
     fn parses_assistant_blocks_and_dedupes_usage() {
         let mut p = parser();
         let usage = r#""usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":100,"cache_creation_input_tokens":20}"#;
@@ -822,7 +858,8 @@ mod tests {
                     input: 10,
                     output: 5,
                     cache_read: 100,
-                    cache_write: 20
+                    cache_write: 20,
+                    ..Usage::default()
                 }
             }
         );

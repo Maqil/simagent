@@ -11,6 +11,7 @@ import { ApprovalCard } from './components/ApprovalCard';
 import { EmptyState } from './components/EmptyState';
 import { SessionBrowser } from './components/SessionBrowser';
 import { UserCard } from './components/UserCard';
+import { UsagePage } from './components/UsagePage';
 import { ReplayBanner, ReplayStatusBar, useReplayClock, useReplayKeys } from './components/ReplayBanner';
 
 const NO_EVENTS: StoredEvent[] = [];
@@ -23,6 +24,8 @@ export interface SceneEvents {
 
 export function App() {
   useEffect(() => {
+    // `?view=usage` opens the Usage page directly (bookmarkable).
+    if (new URLSearchParams(window.location.search).get('view') === 'usage') useStore.getState().setView('usage');
     const mode = demoMode();
     if (mode === 'replay') return startReplayDemo();
     if (mode === 'live') return startDemo();
@@ -57,6 +60,7 @@ export function App() {
   const liveSession = useStore((s) => (s.selectedSession ? (s.sessions[s.selectedSession] ?? null) : null));
   const liveStored = useStore((s) => (s.selectedSession ? (s.events[s.selectedSession] ?? NO_EVENTS) : NO_EVENTS));
   const warning = useStore((s) => s.protocolWarning);
+  const view = useStore((s) => s.view);
 
   // In replay the playhead state replaces the live one everywhere.
   const session: SessionState | null = replayId ? replayState : liveSession;
@@ -75,7 +79,9 @@ export function App() {
       <ReplayBanner />
       <ReplayStatusBar />
       {warning && <div className="banner">{warning}</div>}
-      {session ? (
+      {view === 'usage' ? (
+        <UsagePage />
+      ) : session ? (
         <main className="main">
           <div className="center">
             <div className="scene-wrap">

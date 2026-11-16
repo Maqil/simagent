@@ -29,6 +29,7 @@ use crate::config::Opts;
 use crate::hub::{HubHandle, snapshot_msg};
 use crate::ingest::LoadError;
 use crate::sessions::SessionCache;
+use crate::usage::UsageCache;
 
 /// Largest accepted hook body.
 const MAX_HOOK_BODY: usize = 2 * 1024 * 1024;
@@ -52,8 +53,13 @@ pub struct AppState {
     pub projects_dir: Arc<Path>,
     /// Summary cache for `/api/sessions`.
     pub sessions: SessionCache,
+    /// Incremental per-file usage cache for `/api/usage`.
+    pub usage: UsageCache,
     /// Runs browser-driven turns (`claude -p --resume`).
     pub driver: crate::driver::Driver,
+    /// Loads sessions on demand. `None` until the ingest thread is started (and in tests
+    /// that don't need it).
+    pub ingest: Option<crate::ingest::IngestHandle>,
 }
 
 impl AppState {
@@ -71,7 +77,16 @@ impl AppState {
             file_roots: default_file_roots().into(),
             projects_dir: Arc::from(crate::config::default_projects_dir()),
             sessions: SessionCache::default(),
+            usage: UsageCache::default(),
+            ingest: None,
         }
+    }
+
+    /// Attaches the ingest thread's handle, enabling `OpenSession`.
+    #[must_use]
+    pub fn with_ingest(mut self, ingest: crate::ingest::IngestHandle) -> Self {
+        self.ingest = Some(ingest);
+        self
     }
 
     /// Uses `dir` as the projects dir for session listing and replay.
@@ -103,6 +118,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/file", get(file))
         .route("/api/sessions", get(sessions))
         .route("/api/replay/{session_id}", get(replay))
+        .route("/api/usage", get(usage))
         .fallback(static_ui)
         .with_state(state)
 }
@@ -125,7 +141,12 @@ pub async fn serve(opts: &Opts) -> anyhow::Result<()> {
     })?;
     let state =
         AppState::new(&token, opts.permission_timeout()).with_projects_dir(opts.projects_dir());
-    crate::ingest::spawn(state.hub.clone(), opts.projects_dir(), opts.active_within());
+    let ingest = crate::ingest::spawn(
+        state.hub.clone(),
+        opts.projects_dir(),
+        opts.startup_sessions,
+    );
+    let state = state.with_ingest(ingest);
     let url = format!("http://{addr}/?token={token}");
     tracing::info!(%addr, "simagent listening");
     // Plain, unmissable line: this is the one thing the user needs from the log.
@@ -281,10 +302,30 @@ async fn handle_client_msg(state: &AppState, text: &str) -> Option<ServerMsg> {
             state.driver.interrupt(session).await;
             None
         }
+        ClientMsg::OpenSession { session } => {
+            open_session(state, session).await;
+            None
+        }
         other => {
             tracing::warn!(?other, "unhandled client message");
             None
         }
+    }
+}
+
+/// Starts following `session`. Its state then reaches every browser through the hub, so
+/// there is no reply; a bad id is only logged (the browser's History lists real ids).
+async fn open_session(state: &AppState, session: sim_core::SessionId) {
+    let Some(ingest) = state.ingest.clone() else {
+        tracing::warn!(%session, "open requested but ingest is not running");
+        return;
+    };
+    // `open` lists a directory: keep blocking file work off the async runtime.
+    let id = session.clone();
+    match tokio::task::spawn_blocking(move || ingest.open(id.as_str())).await {
+        Ok(Ok(())) => tracing::info!(%session, "opened session on demand"),
+        Ok(Err(err)) => tracing::warn!(%session, %err, "could not open session"),
+        Err(err) => tracing::warn!(%session, %err, "open task failed"),
     }
 }
 
@@ -310,6 +351,43 @@ async fn sessions(State(state): State<AppState>, Query(q): Query<TokenQuery>) ->
     let cache = state.sessions.clone();
     match tokio::task::spawn_blocking(move || cache.list(&dir, &live)).await {
         Ok(list) => Json(list).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+/// Default and bounds of the `days` window of `/api/usage`.
+const USAGE_DAYS_DEFAULT: i64 = 30;
+const USAGE_DAYS_MAX: i64 = 365;
+
+#[derive(Debug, Deserialize)]
+struct UsageQuery {
+    token: Option<String>,
+    /// Signed so `days=0` or `days=-3` clamps to 1 instead of being a 400.
+    days: Option<i64>,
+}
+
+/// `GET /api/usage?token=&days=N`: hour buckets and 5-hour blocks over the last `N` days
+/// (default 30, clamped to 1..=365) of every transcript on disk.
+async fn usage(State(state): State<AppState>, Query(q): Query<UsageQuery>) -> Response {
+    if !token_ok(&state.token, q.token.as_deref()) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let days = q
+        .days
+        .unwrap_or(USAGE_DAYS_DEFAULT)
+        .clamp(1, USAGE_DAYS_MAX);
+    // In range 1..=365 after the clamp, so the conversion cannot fail.
+    let days = u32::try_from(days).unwrap_or(1);
+    let live = state.hub.session_ids().await.unwrap_or_default();
+    let dir = Arc::clone(&state.projects_dir);
+    let (sessions, usage) = (state.sessions.clone(), state.usage.clone());
+    let report = tokio::task::spawn_blocking(move || {
+        let list = sessions.list(&dir, &live);
+        usage.report(&dir, &list, crate::now_ms(), days)
+    })
+    .await;
+    match report {
+        Ok(report) => Json(report).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
@@ -751,6 +829,57 @@ mod tests {
         assert_eq!(s.cwd.as_deref(), Some("/home/user/project"));
         assert_eq!(s.subagents, 1);
         assert!(!s.live);
+    }
+
+    #[tokio::test]
+    async fn usage_requires_token_and_clamps_days() {
+        let dir = replay_fixture();
+        let app = app_with(dir.path());
+        let resp = get(app.clone(), "/api/usage").await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let resp = get(app.clone(), "/api/usage?token=wrong").await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+        let window = |r: &sim_protocol::UsageReport| (r.generated_ms - r.since_ms) / 86_400_000;
+        for (query, days) in [
+            ("", 30),
+            ("&days=0", 1),
+            ("&days=-4", 1),
+            ("&days=7", 7),
+            ("&days=9999", 365),
+        ] {
+            let resp = get(app.clone(), &format!("/api/usage?token={TOKEN}{query}")).await;
+            assert_eq!(resp.status(), StatusCode::OK, "{query}");
+            let report: sim_protocol::UsageReport =
+                serde_json::from_value(body_json(resp).await).unwrap();
+            assert_eq!(window(&report), days, "{query}");
+        }
+    }
+
+    #[tokio::test]
+    async fn usage_reports_session_with_title_from_listing() {
+        let dir = replay_fixture();
+        let main = dir.path().join("-home-user-project").join("sess-1.jsonl");
+        let ts = time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
+        let text = std::fs::read_to_string(&main).unwrap();
+        let record = format!(
+            r#"{{"type":"assistant","timestamp":"{ts}","message":{{"id":"u1","model":"claude-opus-5-5","content":[],"usage":{{"input_tokens":7,"output_tokens":3}}}}}}"#
+        );
+        std::fs::write(&main, text + &record + "\n").unwrap();
+        let resp = get(app_with(dir.path()), &format!("/api/usage?token={TOKEN}")).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let report: sim_protocol::UsageReport =
+            serde_json::from_value(body_json(resp).await).unwrap();
+        assert_eq!(report.sessions.len(), 1);
+        let s = &report.sessions[0];
+        assert_eq!(s.title.as_deref(), Some("Fixture session"));
+        assert_eq!(s.cwd.as_deref(), Some("/home/user/project"));
+        assert_eq!(s.buckets.len(), 1);
+        assert_eq!(s.buckets[0].usage.input, 7);
+        assert_eq!(report.blocks.len(), 1);
+        assert!(report.blocks[0].active);
     }
 
     #[tokio::test]

@@ -31,6 +31,20 @@ export interface SceneRenderer {
   destroy(): void;
   /** Highlights one agent (from the side panel), or none. */
   setSelected?(agent: AgentId | null): void;
+  /**
+   * Writes where a participant (an agent, or `USER_AGENT` for "you") is drawn right now
+   * into `out`: CSS pixels relative to the canvas, plus its on-screen radius. Returns false
+   * if it is not in the scene. DOM overlays use it to sit next to things on the canvas;
+   * the caller owns `out`, so calling this every frame allocates nothing.
+   */
+  anchorOf?(id: AgentId, out: Anchor): boolean;
+}
+
+/** A point on screen (CSS px, relative to the canvas) plus a radius. */
+export interface Anchor {
+  x: number;
+  y: number;
+  r: number;
 }
 
 export interface SceneOptions {
@@ -38,6 +52,11 @@ export interface SceneOptions {
   onSelectAgent?: (agent: AgentId | null) => void;
   /** Called when the user clicks a "✓ N finished" badge next to a parent agent. */
   onShowFinished?: () => void;
+  /**
+   * Called after every redrawn frame (the scene only redraws when something changed), so
+   * DOM overlays can re-read `anchorOf` when the camera or a node moved.
+   */
+  onViewChanged?: () => void;
 }
 
 export type SceneFactory = (canvas: HTMLCanvasElement, options: SceneOptions) => SceneRenderer;

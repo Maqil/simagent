@@ -13,7 +13,7 @@ browser instead of the terminal.
 | `sim-protocol` | Rust | Versioned wire types for server and UI; generates TypeScript types. |
 | `sim-server` | Rust (tokio, axum) | Ingest (transcript tailing, session discovery, hook endpoint), permission broker, workspace watcher and file serving, SQLite history, WebSocket hub. Ships as the `simagent` binary with the web build embedded. |
 | `sim-render` | Rust (wgpu → wasm) | WebGPU scene: agents, file galaxy, tool visuals, GPU timeline, minimap, picking. |
-| `web/` | TS (Vite, React) | DOM panels: session tabs, messages, approval card, diffs, files, images, chat input. Hosts the WebGPU canvas. |
+| `web/` | TS (Vite, React) | DOM panels: session tabs, messages, approval card, diffs, files, images, chat input. Usage page (all-transcript token/cost totals). Hosts the WebGPU canvas. |
 | `driver/` | TS (Node/Bun) | Sidecar around the Claude Agent SDK for app-driven sessions. |
 
 ## Interfaces
@@ -24,6 +24,7 @@ browser instead of the terminal.
 | Driver ↔ server | JSON-lines over the sidecar's stdio | both |
 | Server ↔ browser | WebSocket: snapshot on connect, then deltas; client sends decisions and prompts | both |
 | Browser → server | HTTP GET for files/images from allowlisted roots | in/out |
+| Browser → server | `GET /api/usage?days=N`, token header: token/cost totals across all transcripts ([01-usage](01-usage.md)) | in/out |
 | web ↔ sim-render | wasm-bindgen calls in the same page | both |
 
 Two public types exist so far: `sim_core::SessionId` (newtype id) and
@@ -32,12 +33,18 @@ Two public types exist so far: `sim_core::SessionId` (newtype id) and
 ## Data flow
 1. Claude Code appends records to a transcript and fires hooks.
 2. Ingest turns both into `sim_core::Event`s. Both sources produce the same `Event`, so
-   nothing downstream cares where a session came from.
+   nothing downstream cares where a session came from. At startup only the
+   `--startup-sessions` (default 3) most recently modified sessions are tailed. A session
+   that changes later is picked up then, and the browser can load any other one with
+   `ClientMsg::OpenSession`, which sends its transcript paths down the same channel the
+   file watcher uses (ADR-0003).
 3. sim-core folds events into `SessionState` and metrics; the server persists events to SQLite.
 4. The WebSocket hub sends a snapshot to each new client, then deltas.
 5. A `PermissionRequest` hook parks on a `oneshot` channel in the broker. The UI's decision
    completes it. On timeout or with no UI connected the broker returns *no decision* and
-   Claude Code shows its normal terminal prompt.
+   Claude Code shows its normal terminal prompt. If Claude Code abandons the hook request
+   (Esc, its own hook timeout), a drop guard still emits `PermissionResolved::FellBack`
+   so the UI card clears.
 6. The UI updates DOM panels and pushes scene changes into sim-render, which redraws only on change.
 
 ## Key design decisions

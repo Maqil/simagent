@@ -1,0 +1,12 @@
+---
+source: crates/sim-core/tests/usage.rs
+expression: out
+---
+## buckets per fixture
+compaction: hour=1794650400000 claude-opus-5-5 sub=false req=3 in=9015 out=460 cr=200000 cw=14200 last=1794650425000 $0.156260
+errors: hour=1794650400000 claude-sonnet-5 sub=false req=2 in=2905 out=170 cr=32000 cw=2400 last=1794650410400 $0.019910
+messages: hour=1794657600000 claude-opus-5-5 sub=false req=5 in=50 out=100 cr=5000 cw=500 last=1794657682000 $0.005700
+simple: hour=1794650400000 claude-opus-5-5 sub=false req=3 in=3210 out=592 cr=62100 cw=3600 last=1794650405800 $0.057800
+
+## blocks (now = last response)
+start=1794650400000 end=1794668400000 active=true req=13 tokens=336302 last=1794657682000 $0.239670

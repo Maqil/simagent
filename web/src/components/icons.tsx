@@ -72,3 +72,15 @@ export const ReplayIcon = (p: IconProps) =>
     ],
     p,
   );
+
+/** Three rising bars on a baseline, used for the Usage button. */
+export const ChartIcon = (p: IconProps) =>
+  svg(
+    [
+      <rect key="a" x="4" y="12" width="3.6" height="7" rx="1" />,
+      <rect key="b" x="10.2" y="8" width="3.6" height="11" rx="1" />,
+      <rect key="c" x="16.4" y="4" width="3.6" height="15" rx="1" />,
+      <rect key="d" x="2.5" y="20.2" width="19" height="1.6" rx="0.8" opacity="0.6" />,
+    ],
+    p,
+  );

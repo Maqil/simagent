@@ -8,10 +8,10 @@ expression: "render(&events, &state)"
 +     0ms main user_prompt "Run the test suite"
 +  1300ms main model_seen claude-sonnet-5
 +  1300ms main tool_started toolu_01bash Bash (Bash) "Run all tests"
-+  1300ms main usage claude-sonnet-5 in=2900 out=80 cache_read=15000 cache_write=2000
++  1300ms main usage claude-sonnet-5 in=2900 out=80 (thinking=0) cache_read=15000 cache_write=2000 (1h=0) $0.014600
 +  9300ms main tool_finished toolu_01bash error=true duration=Some(7900) output="error[E0425]: cannot find value `x` in t…"
 + 10200ms main tool_started toolu_02edit Edit (Write) "/home/user/project/src/main.rs"
-+ 10200ms main usage claude-sonnet-5 in=5 out=90 cache_read=17000 cache_write=400
++ 10200ms main usage claude-sonnet-5 in=5 out=90 (thinking=0) cache_read=17000 cache_write=400 (1h=0) $0.005310
 + 10400ms main tool_finished toolu_02edit error=true duration=None output="<tool_use_error>String to replace not fo…"
 + 11800ms main error "API Error: 529 Overloaded. Please try again later."
 + 11900ms main turn_ended duration=Some(11900)
@@ -19,5 +19,5 @@ expression: "render(&events, &state)"
 ## state
 title: None
 cwd: Some("/home/user/project") branch: Some("main")
-events: 12 cost: $0.03
-agent main status=Idle model=Some("claude-sonnet-5") tools=2 errors=2 active=0 context=17405/1000000 cost=$0.03
+events: 12 cost: $0.02
+agent main status=Idle model=Some("claude-sonnet-5") tools=2 errors=2 active=0 context=17405/1000000 cost=$0.02

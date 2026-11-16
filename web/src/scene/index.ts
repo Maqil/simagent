@@ -1,4 +1,4 @@
-export type { SceneRenderer, SceneOptions, SceneFactory, PushOptions } from './types';
+export type { SceneRenderer, SceneOptions, SceneFactory, PushOptions, Anchor } from './types';
 export { createCanvas2DRenderer } from './canvas2d';
 import { createCanvas2DRenderer } from './canvas2d';
 import type { SceneFactory } from './types';

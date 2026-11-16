@@ -82,7 +82,7 @@ impl SessionCache {
 }
 
 /// `<project>/<id>.jsonl` files (one level deep; subagent files live deeper).
-fn main_transcripts(projects_dir: &Path) -> Vec<PathBuf> {
+pub(crate) fn main_transcripts(projects_dir: &Path) -> Vec<PathBuf> {
     read_dir_paths(projects_dir)
         .iter()
         .filter(|p| p.is_dir())

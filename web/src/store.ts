@@ -26,6 +26,7 @@ import {
 export const MAX_EVENTS_PER_SESSION = 5000;
 
 export type ConnectionState = 'connecting' | 'live' | 'reconnecting' | 'demo';
+export type AppView = 'live' | 'usage';
 
 /** An event plus a client-side sequence number, stable while the list is trimmed. */
 export interface StoredEvent {
@@ -108,6 +109,10 @@ interface Store {
    *  reopens on its own when it becomes active again. Persisted in localStorage. */
   closed: Record<SessionId, number>;
   closeSession: (id: SessionId) => void;
+  /** A session asked for with `openLive` that hasn't arrived yet; selected when it does. */
+  pendingOpen: SessionId | null;
+  /** Opens a session live as a tab, asking the server to load it if it isn't yet. */
+  openLive: (id: SessionId) => void;
   send: (msg: ClientMsg) => void;
   /** Continues `session` with `text` (headless `claude -p --resume`). */
   sendPrompt: (session: SessionId, text: string) => void;
@@ -143,6 +148,11 @@ interface Store {
   replaySeek: (count: number) => void;
   /** Moves the playhead to a play-clock time. */
   replaySeekTime: (t: number) => void;
+
+  // ---- top-level view
+  /** `live`: scene + panels; `usage`: the cross-session Usage page. */
+  view: AppView;
+  setView: (view: AppView) => void;
   /** Steps one event forward (+1) or back (-1). */
   replayStep: (dir: 1 | -1) => void;
   /** Jumps to the next (+1) or previous (-1) message_sent event. */
@@ -222,6 +232,8 @@ export const useStore = create<Store>((set, get) => ({
   panelTab: 'messages',
   drive: {},
   closed: loadClosed(),
+  view: 'live',
+  setView: (view) => set({ view }),
   closeSession: (id) => {
     const st = get();
     const closed = { ...st.closed, [id]: st.sessions[id]?.last_activity ?? Date.now() };
@@ -234,6 +246,26 @@ export const useStore = create<Store>((set, get) => ({
     set({ closed, selectedSession, selectedAgent: null, focusSeq: null });
     if (st.replay?.id === id) get().exitReplay();
     if (selectedSession) get().selectSession(selectedSession);
+  },
+  pendingOpen: null,
+  openLive: (id) => {
+    const st = get();
+    if (st.replay) st.exitReplay();
+    // Opening on purpose overrides an earlier "close tab".
+    let closed = st.closed;
+    if (closed[id] !== undefined) {
+      closed = { ...closed };
+      delete closed[id];
+      saveClosed(closed);
+    }
+    set({ closed, browserOpen: false, view: 'live' });
+    if (st.sessions[id]) {
+      set({ pendingOpen: null });
+      get().selectSession(id);
+      return;
+    }
+    set({ pendingOpen: id });
+    get().send({ t: 'open_session', session: id });
   },
   focusSeq: null,
   decided: {},
@@ -281,11 +313,14 @@ export const useStore = create<Store>((set, get) => ({
             decided = { ...decided };
             delete decided[event.request_id];
           }
+          // The session the user just opened from History has arrived: show it.
+          const opened = st.pendingOpen === state.id;
           return {
             sessions,
             decided,
             events: { ...st.events, [state.id]: trim([...list, wrap(event)]) },
-            selectedSession: st.selectedSession ?? state.id,
+            selectedSession: opened ? state.id : (st.selectedSession ?? state.id),
+            pendingOpen: opened ? null : st.pendingOpen,
           };
         });
         if (!get().historyRequested[state.id] && get().selectedSession === state.id) {
@@ -358,7 +393,7 @@ export const useStore = create<Store>((set, get) => ({
 
   openReplay: async (id, opts) => {
     const token = ++replayLoadToken;
-    set({ replayStatus: { loading: id, error: null }, browserOpen: false });
+    set({ replayStatus: { loading: id, error: null }, browserOpen: false, view: 'live' });
     try {
       let events = await get().replaySource.load(id);
       // A live session the server cannot read from disk: fall back to what we hold.
@@ -535,6 +570,25 @@ export function isClosed(s: SessionState, closed: Record<SessionId, number>): bo
 /** Sessions shown as tabs: not closed, most recently active first. */
 export function openSessions(sessions: Record<SessionId, SessionState>, closed: Record<SessionId, number>): SessionState[] {
   return sortedSessions(sessions).filter((s) => !isClosed(s, closed));
+}
+
+/** How many session tabs the header shows before folding the rest into "+N". */
+export const MAX_TABS = 5;
+
+/**
+ * Splits open sessions (newest activity first) into header tabs and an overflow count.
+ * The `MAX_TABS` most recent get a tab; the selected session and any session waiting
+ * for a permission decision always keep theirs, so nothing that needs you is hidden.
+ */
+export function tabSessions(
+  open: SessionState[],
+  selected: SessionId | null,
+  decided: Record<RequestId, true>,
+): { tabs: SessionState[]; hidden: number } {
+  const tabs = open.filter(
+    (s, i) => i < MAX_TABS || s.id === selected || s.pending.some((p) => !decided[p.request_id]),
+  );
+  return { tabs, hidden: open.length - tabs.length };
 }
 
 export function sortedSessions(sessions: Record<SessionId, SessionState>): SessionState[] {

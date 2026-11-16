@@ -47,8 +47,14 @@ fn summarize(kind: &EventKind) -> String {
         EventKind::Thinking { text } => format!("thinking ({} chars)", text.chars().count()),
         EventKind::ModelSeen { model } => format!("model_seen {model}"),
         EventKind::UsageReported { model, usage } => format!(
-            "usage {model} in={} out={} cache_read={} cache_write={}",
-            usage.input, usage.output, usage.cache_read, usage.cache_write
+            "usage {model} in={} out={} (thinking={}) cache_read={} cache_write={} (1h={}) ${:.6}",
+            usage.input,
+            usage.output,
+            usage.thinking,
+            usage.cache_read,
+            usage.cache_write,
+            usage.cache_write_1h,
+            sim_core::cost::cost_usd(model, usage)
         ),
         EventKind::ToolStarted {
             tool_use_id,

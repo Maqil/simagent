@@ -9,18 +9,18 @@ expression: "render(&events, &state)"
 +     0ms main title "Rename greet to welcome"
 +  1600ms main model_seen claude-opus-5-5
 +  1600ms main thinking (29 chars)
-+  1600ms main usage claude-opus-5-5 in=3200 out=410 cache_read=18000 cache_write=2400
++  1600ms main usage claude-opus-5-5 in=3200 out=410 (thinking=0) cache_read=18000 cache_write=2400 (1h=0) $0.036600
 +  1900ms main tool_started toolu_01read Read (Read) "/home/user/project/src/lib.rs"
 +  2100ms main tool_finished toolu_01read error=false duration=None output="1\tpub fn greet() -> &'static str {…"
 +  3500ms main tool_started toolu_02edit Edit (Write) "/home/user/project/src/lib.rs"
-+  3500ms main usage claude-opus-5-5 in=4 out=160 cache_read=21600 cache_write=900
++  3500ms main usage claude-opus-5-5 in=4 out=160 (thinking=40) cache_read=21600 cache_write=900 (1h=900) $0.014736
 +  3800ms main tool_finished toolu_02edit error=false duration=None output="The file /home/user/project/src/lib.rs h…"
 +  5300ms main assistant_text "Renamed `greet` to `welcome` in src/lib.rs."
-+  5300ms main usage claude-opus-5-5 in=6 out=22 cache_read=22500 cache_write=300
++  5300ms main usage claude-opus-5-5 in=6 out=22 (thinking=0) cache_read=22500 cache_write=300 (1h=0) $0.006464
 +  5500ms main turn_ended duration=Some(5500)
 
 ## state
 title: Some("Rename greet to welcome")
 cwd: Some("/home/user/project") branch: Some("main")
-events: 15 cost: $0.08
-agent main status=Idle model=Some("claude-opus-5-5") tools=2 errors=0 active=0 context=22806/1000000 cost=$0.08
+events: 15 cost: $0.06
+agent main status=Idle model=Some("claude-opus-5-5") tools=2 errors=0 active=0 context=22806/1000000 cost=$0.06

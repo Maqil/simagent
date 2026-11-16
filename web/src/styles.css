@@ -289,6 +289,16 @@ a {
 .tab--replay .tab__close,
 .tab__close:focus-visible { opacity: 1; }
 .tab__close:hover { background: rgba(255, 85, 102, 0.18); color: #ff8898; }
+/* "+N": the open sessions that didn't get a tab; opens History. */
+.tab--more {
+  flex: none;
+  min-width: 0;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+  border-color: var(--glass-border);
+  color: var(--text-muted);
+}
+.tab--more:hover { color: var(--holo-bright); }
 .tab--replay {
   border-color: rgba(204, 136, 255, 0.5);
   background: rgba(204, 136, 255, 0.1);
@@ -760,6 +770,28 @@ a {
   margin-left: auto;
   font: 11px var(--font-mono);
   color: var(--st-awaiting);
+}
+.approval__close {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--st-awaiting);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.approval__close:hover,
+.approval__close:focus-visible {
+  color: #ffe2b0;
+  background: rgba(255, 170, 51, 0.12);
+  border-color: rgba(255, 170, 51, 0.4);
+  outline: none;
 }
 .approval__meta {
   margin: 4px 0 10px;
@@ -1412,6 +1444,27 @@ kbd {
 .session-row--active {
   background: var(--holo-10);
 }
+/* A History row: the row opens live; the Replay button sits over its right edge and
+   shows on hover (keyboard users have ⇧↵). */
+.session-item {
+  position: relative;
+}
+.session-item__replay {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  opacity: 0;
+  transition: opacity 100ms;
+}
+.session-item:hover .session-item__replay,
+.session-item__replay:focus-visible {
+  opacity: 1;
+}
+/* Keep the row's meta (age, size) clear of the button while it shows. */
+.session-item:hover .session-row__meta {
+  visibility: hidden;
+}
 .session-row__main {
   flex: 1;
   min-width: 0;
@@ -1991,3 +2044,165 @@ kbd {
 .md-code__pre code { background: none; border: 0; padding: 0; border-radius: 0; color: inherit; font: inherit; }
 .md-quote > .md-p:last-child { margin-bottom: 0; }
 .md-quote { padding: 6px 12px; }
+
+/* ---------------------------------------------------------------- question card */
+/* AskUserQuestion: options travel from the bot toward "you" and wait halfway. The outer
+   element is moved by JS (transform); --from-x/--from-y are the bot's offset from the card
+   centre, so each item starts at the bot. Above the canvas and hint, below the user card
+   (10) and the approval card (20). */
+.qcard {
+  --ask: #ffaa33;
+  --from-x: 0px;
+  --from-y: 0px;
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  z-index: 6;
+  pointer-events: none;
+}
+.qcard__inner {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -50%);
+  width: max-content;
+  max-width: 280px;
+}
+.qcard--above .qcard__inner { transform: translate(-50%, -100%); }
+.qcard__body {
+  padding: 9px 12px 8px;
+  border-radius: 10px;
+  background: rgba(8, 12, 24, 0.88);
+  border: 1px solid rgba(255, 170, 51, 0.45);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  font: 12px/1.4 var(--font-sans);
+  color: #e6eef8;
+  box-shadow: 0 0 0 rgba(255, 170, 51, 0);
+  animation:
+    qcard-in 220ms ease-out both,
+    qcard-glow 2.4s ease-in-out calc(540ms + var(--n, 0) * 90ms) infinite;
+}
+.qcard--leaving .qcard__body { animation: qcard-out 350ms ease-in forwards; }
+.qcard__q + .qcard__q { margin-top: 8px; }
+.qcard__head,
+.qcard__opt,
+.qcard__wait {
+  animation: qcard-item 420ms cubic-bezier(0.2, 0.8, 0.2, 1) calc(120ms + var(--i, 0) * 90ms) both;
+}
+.qcard__head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.qcard__glyph {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--ask);
+  color: #1a1204;
+  font-weight: 700;
+  font-size: 10px;
+  line-height: 1;
+}
+.qcard__chip {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 170, 51, 0.5);
+  color: var(--ask);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.qcard__text {
+  min-width: 0;
+  color: #ffffff;
+  font-weight: 600;
+}
+.qcard__opts {
+  margin: 5px 0 0;
+  padding: 0 0 0 21px;
+  list-style: none;
+}
+.qcard__opt {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 1px 0;
+}
+.qcard__dot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ask);
+}
+.qcard__label {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.qcard__wait {
+  margin-top: 6px;
+  color: var(--ask);
+  font-size: 11px;
+}
+.qcard__dots span {
+  display: inline-block;
+  width: 3px;
+  height: 3px;
+  margin-left: 2px;
+  border-radius: 50%;
+  background: currentColor;
+  vertical-align: middle;
+  animation: qcard-blink 1.2s ease-in-out infinite;
+}
+.qcard__dots span:nth-child(2) { animation-delay: 0.2s; }
+.qcard__dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes qcard-in {
+  from { opacity: 0; transform: scale(0.9); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes qcard-item {
+  from { opacity: 0; transform: translate(var(--from-x), var(--from-y)) scale(0.6); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes qcard-glow {
+  0%, 100% { box-shadow: 0 0 0 rgba(255, 170, 51, 0); }
+  50% { box-shadow: 0 0 18px rgba(255, 170, 51, 0.35); }
+}
+@keyframes qcard-out {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: scale(0.94); }
+}
+@keyframes qcard-blink {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 1; }
+}
+@keyframes qcard-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes qcard-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .qcard__body { animation: qcard-fade-in 220ms ease-out both; }
+  .qcard--leaving .qcard__body { animation: qcard-fade-out 350ms ease-in forwards; }
+  .qcard__head,
+  .qcard__opt,
+  .qcard__wait,
+  .qcard__dots span { animation: none; }
+}

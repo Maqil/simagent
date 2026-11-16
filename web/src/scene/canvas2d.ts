@@ -192,6 +192,8 @@ export function createCanvas2DRenderer(
   let sessionId: string | null = null;
   let lay: LayoutResult | null = null;
   const visuals = new Map<AgentId, Visual>();
+  /** Agents blocked on a human permission decision; refilled in `setState`, read per frame. */
+  const waiting = new Set<AgentId>();
   const nameCache = new Map<string, NameInfo>();
   let selected: AgentId | null = null;
   let hovered: AgentId | null = null;
@@ -315,6 +317,7 @@ export function createCanvas2DRenderer(
     clock += dt * timeScale;
     lazy = false;
     const animating = draw(now, dt);
+    options.onViewChanged?.();
     if (animating) requestFrame();
     else {
       lastNow = 0;
@@ -402,10 +405,16 @@ export function createCanvas2DRenderer(
       sessionId = null;
       lay = null;
       visuals.clear();
+      waiting.clear();
       clearEffects();
       requestFrame();
       return;
     }
+    // Who is waiting on the human: the server's status, or any open permission request.
+    // Done once per state change (not per frame), reusing the same Set.
+    waiting.clear();
+    for (const id in next.agents) if (next.agents[id]!.status === 'awaiting_permission') waiting.add(id);
+    for (const p of next.pending) waiting.add(p.agent);
     const fresh = next.id !== sessionId;
     if (fresh) {
       visuals.clear();
@@ -1040,7 +1049,10 @@ export function createCanvas2DRenderer(
 
   /** Draws one agent; returns whether it needs more animation frames. */
   function drawAgent(a: AgentState, v: Visual, now: number, t: number): boolean {
-    const c = statusColor[a.status] ?? statusColor.idle;
+    // Waiting on the human outranks whatever the transcript last said (thinking/tool).
+    const wait = waiting.has(a.id) && v.exitStart < 0;
+    const st: AgentStatus = wait ? 'awaiting_permission' : a.status;
+    const c = statusColor[st] ?? statusColor.idle;
     const age = now - v.statusSince;
     let animating = false;
     let x = v.x;
@@ -1090,10 +1102,10 @@ export function createCanvas2DRenderer(
     const rr = r * scale;
 
     // Glow (pre-rendered sprite, brighter while waiting on the human).
-    const busy = isBusy(a.status);
+    const busy = isBusy(st);
     const breathe = busy && !reduced ? 0.85 + 0.15 * Math.sin(t * 2.4) : 1;
-    ctx.globalAlpha = alpha * (a.status === 'idle' || a.status === 'done' ? 0.45 : a.status === 'awaiting_permission' ? 1 : 0.8) * breathe;
-    const gs = rr * (a.status === 'awaiting_permission' ? 5 : 4);
+    ctx.globalAlpha = alpha * (st === 'idle' || st === 'done' ? 0.45 : wait ? 1 : 0.8) * breathe;
+    const gs = rr * (wait ? 5 : 4);
     ctx.drawImage(glowSprite(c), x - gs, y - gs, gs * 2, gs * 2);
     if (recv >= 0 && recv < RECV_DUR) {
       ctx.globalAlpha = alpha * (1 - recv / RECV_DUR);
@@ -1101,8 +1113,13 @@ export function createCanvas2DRenderer(
     }
     ctx.globalAlpha = alpha;
 
-    // Status motion.
-    if (!reduced && v.exitStart < 0) {
+    // Status motion. Waiting on the human replaces the thinking/tool motion with an amber
+    // double ring and a dashed lead toward the "you" node.
+    if (wait) {
+      if (user.shown) drawWaitLead(x, y, rr, t, alpha);
+      drawWaitRings(x, y, rr, t, alpha);
+      if (!reduced) animating = true;
+    } else if (!reduced && v.exitStart < 0) {
       if (a.status === 'thinking') {
         drawThinkHalo(x, y, rr, t + v.phase, alpha);
         animating = true;
@@ -1117,18 +1134,6 @@ export function createCanvas2DRenderer(
         ctx.beginPath();
         ctx.arc(x, y, r + 4 + ph * 18, 0, Math.PI * 2);
         ctx.stroke();
-        ctx.globalAlpha = 1;
-        animating = true;
-      } else if (a.status === 'awaiting_permission') {
-        ctx.strokeStyle = c;
-        ctx.lineWidth = 1.5;
-        for (let i = 0; i < 2; i++) {
-          const ph = ((t / 2.2 + i * 0.5) % 1 + 1) % 1;
-          ctx.globalAlpha = 0.6 * (1 - ph);
-          ctx.beginPath();
-          ctx.arc(x, y, r + 8 + ph * 34, 0, Math.PI * 2);
-          ctx.stroke();
-        }
         ctx.globalAlpha = 1;
         animating = true;
       } else if (a.status === 'compacting') {
@@ -1147,7 +1152,7 @@ export function createCanvas2DRenderer(
       }
     } else if (a.status === 'thinking') {
       drawThinkHalo(x, y, rr, 0, alpha);
-    } else if (a.status === 'awaiting_permission' || a.status === 'tool') {
+    } else if (a.status === 'tool') {
       ctx.strokeStyle = c;
       ctx.globalAlpha = 0.6 * alpha;
       ctx.lineWidth = 1.5;
@@ -1164,11 +1169,11 @@ export function createCanvas2DRenderer(
     ctx.beginPath();
     ctx.arc(x, y, rr, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = rgba(c, a.status === 'idle' || a.status === 'done' ? 0.45 : 0.85);
+    ctx.strokeStyle = rgba(c, st === 'idle' || st === 'done' ? 0.45 : 0.85);
     ctx.lineWidth = a.status === 'error' ? 3 : 2;
     ctx.stroke();
     const newest = a.active_tools.length ? a.active_tools[a.active_tools.length - 1]!.tool_kind : null;
-    const pose = poseFor(a.status, newest);
+    const pose = poseFor(st, newest);
     // Each agent gets a phase offset so a crowd doesn't animate in lockstep.
     const frame = reduced ? 0 : frameOf(pose, t + v.phase);
     const body = a.parent === null ? color.mascotBody : SUB_BODY;
@@ -1206,13 +1211,100 @@ export function createCanvas2DRenderer(
 
     const pillBottom = y - v.radius - 16;
     drawPill(x, pillBottom, v, c);
-    if (a.status === 'thinking' && v.exitStart < 0) {
+    if (wait) {
+      drawWaitBadge(x, pillBottom - v.name.h - WAIT_BADGE_R - 6, t, alpha);
+    } else if (a.status === 'thinking' && v.exitStart < 0) {
       drawThought(x + v.name.w / 2 - 4, pillBottom - v.name.h, t);
       animating = animating || !reduced;
     }
     drawToolRows(v, x, y + v.radius + 22);
     ctx.globalAlpha = 1;
     return animating;
+  }
+
+  /**
+   * Waiting for permission: two amber rings that swell and brighten together on a slow
+   * ~1.6 s pulse, the inner one leading the outer. With reduced motion they hold still.
+   */
+  function drawWaitRings(x: number, y: number, rr: number, t: number, alpha: number) {
+    const amber = statusColor.awaiting_permission;
+    ctx.strokeStyle = amber;
+    for (let i = 0; i < 2; i++) {
+      const p = reduced ? 0.6 : 0.5 + 0.5 * Math.sin(((t - i * 0.2) * Math.PI * 2) / WAIT_PERIOD);
+      ctx.globalAlpha = alpha * (0.35 + 0.5 * p) * (i === 0 ? 1 : 0.7);
+      ctx.lineWidth = i === 0 ? 2 + p : 1.2 + p * 0.6;
+      ctx.beginPath();
+      ctx.arc(x, y, rr + 10 + i * 7 + p * 2, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = alpha;
+  }
+
+  /**
+   * Amber "!" badge floating above the name pill, bobbing gently: "this needs you".
+   * `cy` is the badge centre when at rest.
+   */
+  function drawWaitBadge(cx: number, cy: number, t: number, alpha: number) {
+    const amber = statusColor.awaiting_permission;
+    const bob = reduced ? 0 : Math.sin((t * Math.PI * 2) / WAIT_PERIOD) * 2.5;
+    const y = cy + bob;
+    // Soft halo, then a dark disc with an amber rim and a bold amber "!".
+    ctx.globalAlpha = alpha * 0.55;
+    const gs = WAIT_BADGE_R * 3;
+    ctx.drawImage(glowSprite(amber), cx - gs, y - gs, gs * 2, gs * 2);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = 'rgba(8,12,24,0.92)';
+    ctx.strokeStyle = amber;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(cx, y, WAIT_BADGE_R, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    // Little tail pointing down at the pill, like a speech bubble.
+    ctx.fillStyle = amber;
+    ctx.beginPath();
+    ctx.moveTo(cx - 3, y + WAIT_BADGE_R - 0.5);
+    ctx.lineTo(cx + 3, y + WAIT_BADGE_R - 0.5);
+    ctx.lineTo(cx, y + WAIT_BADGE_R + 4);
+    ctx.closePath();
+    ctx.fill();
+    ctx.font = FONT_WAIT;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('!', cx, y + 0.5);
+  }
+
+  /**
+   * A faint amber dashed curve from the waiting agent to the "you" node, with dashes
+   * marching toward you. Static with reduced motion.
+   */
+  function drawWaitLead(x: number, y: number, rr: number, t: number, alpha: number) {
+    const dx = user.x - x;
+    const dy = user.y - y;
+    const d = Math.hypot(dx, dy);
+    if (d < rr + USER_RADIUS + 20) return;
+    const ux = dx / d;
+    const uy = dy / d;
+    // Start/end just outside each orb; bow the curve sideways a little.
+    const sx = x + ux * (rr + 18);
+    const sy = y + uy * (rr + 18);
+    const ex = user.x - ux * (USER_RADIUS + 10);
+    const ey = user.y - uy * (USER_RADIUS + 10);
+    const bend = Math.min(60, d * 0.15);
+    const cx = (sx + ex) / 2 - uy * bend;
+    const cy = (sy + ey) / 2 + ux * bend;
+    ctx.strokeStyle = statusColor.awaiting_permission;
+    ctx.lineWidth = 1.5;
+    ctx.globalAlpha = alpha * 0.35;
+    ctx.setLineDash(WAIT_DASH);
+    ctx.lineDashOffset = reduced ? 0 : -t * 18;
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.quadraticCurveTo(cx, cy, ex, ey);
+    ctx.stroke();
+    ctx.setLineDash(NO_DASH);
+    ctx.lineDashOffset = 0;
+    ctx.globalAlpha = alpha;
   }
 
   /**
@@ -1844,6 +1936,14 @@ export function createCanvas2DRenderer(
       selected = agent;
       requestFrame();
     },
+    anchorOf(id, out) {
+      if (!posOf(id, out)) return false;
+      // World → screen: the inverse of toWorld().
+      out.x = out.x * zoom + cssW / 2 + panX;
+      out.y = out.y * zoom + cssH / 2 + panY;
+      out.r = radiusOf(id) * zoom;
+      return true;
+    },
     destroy() {
       destroyed = true;
       if (raf) cancelAnimationFrame(raf);
@@ -1867,6 +1967,14 @@ const THINK_NODES = 7;
 const IDLE_BREATH = 4;
 /** Redraw interval for slow ambient (idle) motion, ms. */
 const LAZY_MS = 110;
+/** Seconds per pulse of the "waiting for permission" rings and badge bob. */
+const WAIT_PERIOD = 1.6;
+/** Radius of the "!" badge above a waiting agent. */
+const WAIT_BADGE_R = 8;
+const FONT_WAIT = `800 12px ${fontSans}`;
+/** Dash patterns reused every frame (setLineDash copies, so sharing is safe). */
+const WAIT_DASH = [4, 7];
+const NO_DASH: number[] = [];
 
 /** Subagent bots are cool blue-grey so the orchestrator's coral bot stands out. */
 const SUB_BODY = '#8fb4d8';

@@ -19,6 +19,7 @@ pub mod hub;
 pub mod ingest;
 pub mod replay;
 pub mod sessions;
+pub mod usage;
 
 pub use http::{AppState, router};
 

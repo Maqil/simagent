@@ -67,9 +67,10 @@ pub struct Opts {
     /// Claude Code projects directory (default `~/.claude/projects`).
     #[arg(long, global = true)]
     pub projects_dir: Option<PathBuf>,
-    /// At startup, only load transcripts modified within this many minutes.
-    #[arg(long, global = true, default_value_t = 120)]
-    pub active_within_mins: u64,
+    /// How many of the most recent sessions to load at startup. Others load when they
+    /// change, or on demand from History.
+    #[arg(long, global = true, default_value_t = 3)]
+    pub startup_sessions: usize,
     /// How long a permission request waits for the browser before falling back.
     #[arg(long, global = true, default_value_t = 120)]
     pub permission_timeout_secs: u64,
@@ -91,12 +92,6 @@ impl Opts {
     #[must_use]
     pub fn permission_timeout(&self) -> Duration {
         Duration::from_secs(self.permission_timeout_secs)
-    }
-
-    /// Startup window for transcripts as a [`Duration`].
-    #[must_use]
-    pub fn active_within(&self) -> Duration {
-        Duration::from_secs(self.active_within_mins.saturating_mul(60))
     }
 }
 

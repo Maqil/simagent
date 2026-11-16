@@ -1,7 +1,9 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { createSceneRenderer, type SceneRenderer } from '../scene';
 import type { AgentEvent, SessionState } from '../protocol';
 import { useStore } from '../store';
+import { openQuestion } from '../scene/questions';
+import { QuestionCard } from './QuestionCard';
 
 /** New tail events beyond this count are treated as a seek (no flight for old ones). */
 const SEEK_BATCH = 30;
@@ -19,6 +21,8 @@ interface Props {
 export function Scene({ session, events }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<SceneRenderer | null>(null);
+  // The overlay's reposition callback; the renderer calls it after each redrawn frame.
+  const viewHook = useRef<(() => void) | null>(null);
   const pushed = useRef<{ key: string | null; count: number; last: AgentEvent | null }>({
     key: null,
     count: 0,
@@ -27,6 +31,7 @@ export function Scene({ session, events }: Props) {
   const selectAgent = useStore((s) => s.selectAgent);
   const selectedAgent = useStore((s) => s.selectedAgent);
   const speed = useStore((s) => (s.replay ? s.replay.speed : 1));
+  const question = useMemo(() => openQuestion(events?.list ?? [], session), [events, session]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -34,6 +39,7 @@ export function Scene({ session, events }: Props) {
     const r = createSceneRenderer(canvas, {
       onSelectAgent: (id) => selectAgent(id),
       onShowFinished: () => useStore.getState().setPanelTab('finished'),
+      onViewChanged: () => viewHook.current?.(),
     });
     rendererRef.current = r;
     pushed.current = { key: null, count: 0, last: null };
@@ -87,6 +93,7 @@ export function Scene({ session, events }: Props) {
   return (
     <div className="scene">
       <canvas ref={canvasRef} className="scene__canvas" aria-label="Agent scene" />
+      <QuestionCard question={question} renderer={rendererRef} viewHook={viewHook} />
       <div className="scene__hint">drag to pan · wheel to zoom · double-click to fit</div>
     </div>
   );

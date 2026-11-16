@@ -8,22 +8,22 @@ expression: "render(&events, &state)"
 +  1000ms main user_prompt "Audit the parser in a background agent and tell the reviewer…"
 +  3000ms main model_seen claude-opus-5-5
 +  3000ms main tool_started toolu_01 Agent (Agent) "Audit parser"
-+  3000ms main usage claude-opus-5-5 in=10 out=20 cache_read=1000 cache_write=100
++  3000ms main usage claude-opus-5-5 in=10 out=20 (thinking=0) cache_read=1000 cache_write=100 (1h=0) $0.001140
 +  4000ms main tool_finished toolu_01 error=false duration=None output="Async agent launched successfully. agent…"
 +  5000ms main assistant_text "Started a background audit."
-+  5000ms main usage claude-opus-5-5 in=10 out=20 cache_read=1000 cache_write=100
++  5000ms main usage claude-opus-5-5 in=10 out=20 (thinking=0) cache_read=1000 cache_write=100 (1h=0) $0.001140
 + 60000ms main message a1 -> main (Message) "No bugs found; two style nits."
 + 61000ms main message a1 -> main (Notification) "Agent \"Audit parser\" finished"
 + 63000ms main message main -> reviewer (Message) "The parser audit is done: no bugs, two style nits."
 + 63000ms main tool_started toolu_02 SendMessage (Other) "to reviewer"
-+ 63000ms main usage claude-opus-5-5 in=10 out=20 cache_read=1000 cache_write=100
++ 63000ms main usage claude-opus-5-5 in=10 out=20 (thinking=0) cache_read=1000 cache_write=100 (1h=0) $0.001140
 + 64000ms main tool_finished toolu_02 error=false duration=None output="Message sent."
 + 66000ms main tool_started toolu_03 Agent (Agent) "Summarize nits"
-+ 66000ms main usage claude-opus-5-5 in=10 out=20 cache_read=1000 cache_write=100
++ 66000ms main usage claude-opus-5-5 in=10 out=20 (thinking=0) cache_read=1000 cache_write=100 (1h=0) $0.001140
 + 80000ms main message a2 -> main (Result) "Nit 1: rename helper. Nit 2: add doc comment."
 + 80000ms main tool_finished toolu_03 error=false duration=Some(14000) output="Nit 1: rename helper. Nit 2: add doc com…"
 + 82000ms main assistant_text "Done: audit finished and the reviewer was told."
-+ 82000ms main usage claude-opus-5-5 in=10 out=20 cache_read=1000 cache_write=100
++ 82000ms main usage claude-opus-5-5 in=10 out=20 (thinking=0) cache_read=1000 cache_write=100 (1h=0) $0.001140
 + 83000ms main turn_ended duration=Some(82000)
 
 ## state

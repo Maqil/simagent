@@ -36,6 +36,18 @@ export interface Usage {
   output: number;
   cache_read: number;
   cache_write: number;
+  /** Part of `cache_write` with the 1-hour lifetime (2x input). Absent on old events. */
+  cache_write_1h?: number;
+  /** Part of `output` spent thinking. Absent on old events. */
+  thinking?: number;
+}
+
+/** `cost::CostBreakdown`: estimated USD split by token kind. */
+export interface CostBreakdown {
+  input: number;
+  output: number;
+  cache_read: number;
+  cache_write: number;
 }
 
 /** `Decision`, tagged by `behavior`. */
@@ -180,7 +192,8 @@ export type ClientMsg =
   | { t: 'decide'; request_id: RequestId; decision: Decision }
   | { t: 'load_history'; session: SessionId }
   | { t: 'prompt'; session: SessionId; text: string }
-  | { t: 'interrupt'; session: SessionId };
+  | { t: 'interrupt'; session: SessionId }
+  | { t: 'open_session'; session: SessionId };
 
 // ---- sim-protocol: HTTP replay APIs ----
 /** One transcript on disk (`GET /api/sessions`), mirrors `SessionSummary`. */
@@ -193,6 +206,47 @@ export interface SessionSummary {
   size_bytes: number;
   subagents: number;
   live: boolean;
+}
+
+// ---- sim-protocol: GET /api/usage?days=N ----
+/** Mirrors `UsageReport`. Hour buckets in UTC; group into local days in the browser. */
+export interface UsageReport {
+  generated_ms: number;
+  since_ms: number;
+  /** Most recently active first. */
+  sessions: SessionUsage[];
+  /** Estimated 5-hour windows, oldest first. */
+  blocks: UsageBlock[];
+}
+
+export interface SessionUsage {
+  id: SessionId;
+  project: string;
+  cwd: string | null;
+  title: string | null;
+  live: boolean;
+  last_activity_ms: number;
+  buckets: UsageBucket[];
+}
+
+export interface UsageBucket {
+  /** Start of the UTC hour, epoch ms. */
+  hour_ms: number;
+  model: string;
+  subagent: boolean;
+  requests: number;
+  usage: Usage;
+  cost: CostBreakdown;
+}
+
+export interface UsageBlock {
+  start_ms: number;
+  end_ms: number;
+  last_activity_ms: number;
+  active: boolean;
+  requests: number;
+  usage: Usage;
+  cost: CostBreakdown;
 }
 
 /** `GET /api/replay/{id}`: every event of a session (incl. subagents), sorted by `at`. */
